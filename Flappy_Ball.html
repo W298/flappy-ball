@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>FLAPPY BALL</title>
+  </head>
+
+  <body bgcolor="#4e4e4e">
+    <table width="400" id="top_table">
+      <tr>
+        <td>
+          <b><font face="Consolas" size="6" color="white">FLAPPY BALL</font></b>
+        </td>
+        <td align="right">
+          <b
+            ><font face="Consolas" size="5" color="white" id="stage"
+              >STAGE :
+            </font></b
+          >
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <b
+            ><font face="Consolas" size="3" color="white"
+              >SPACE - JUMP, UP / DOWN - CHANGE GRAVITY</font
+            ></b
+          >
+        </td>
+        <td align="right">
+          <b
+            ><font face="Consolas" size="5" color="white" id="score"
+              >SCORE :
+            </font></b
+          >
+        </td>
+      </tr>
+    </table>
+
+    <canvas id="main_canvas"></canvas>
+
+    <script>
+      // --------------- // FIELD // ---------------
+
+      // CANVAS
+      var canvas = document.getElementById("main_canvas");
+      var c = canvas.getContext("2d");
+
+      // TABLE, SCORE
+      var top_table = document.getElementById("top_table");
+      var score_txt = document.getElementById("score");
+      var stage_txt = document.getElementById("stage");
+
+      // TIME
+      var pause_period = false;
+      var temp_period = 0;
+      var period = 0;
+
+      // Game mode
+      var CHEAT_MODE = false;
+      var GAME_OVER = false;
+
+      // Current Information
+      var curStage = 1;
+      var score = 0;
+      var hscore = 0;
+
+      // Configures
+      var stage_per_obs = 20;
+      var speed = -5;
+      var tor = 1.5;
+
+      // Etc
+      var prevTarget = null;
+
+      // Arrays
+      var obs_ary = [];
+      var p_ary = [];
+      var txt_ary = [];
+      var interp_ary = [];
+
+      // Consts
+      var ALIVE = 1;
+      var DEAD = 0;
+
+      // Player
+      var player_ins = new Player(
+        [canvas.width / 2, canvas.height / 2],
+        [0, 0]
+      );
+      player_ins.draw();
+
+      // --------------- // EVENTS // ---------------
+
+      // Key Down Event
+      addEventListener("keydown", function (event) {
+        if (event.code == "Space") {
+          // Jump
+          player_ins.vel[1] = -8;
+        } else if (event.code == "ArrowUp") {
+          // Increase Gravity value
+          player_ins.gravity += 0.1;
+        } else if (event.code == "ArrowDown") {
+          // Decrease Gravity value
+          player_ins.gravity -= 0.1;
+        } else if (event.code == "KeyC") {
+          // Enable Cheat mode
+          CHEAT_MODE = true;
+          GAME_OVER = false;
+        }
+      });
+
+      // --------------- // GENERAL FUNCTIONS // ---------------
+
+      function rand(min, max) {
+        return Math.floor(Math.random() * (max - min + 1) + min);
+      }
+
+      function clamp(value, min, max) {
+        if (value < min) return min;
+
+        if (value > max) return max;
+
+        return value;
+      }
+
+      function inRange(value, min, max) {
+        return value >= min && value <= max;
+      }
+
+      function randPercent3(p1, p2, p3) {
+        let v = rand(1, 100);
+
+        if (inRange(v, 1, p1)) {
+          return 1;
+        } else if (inRange(v, p1 + 1, p2 - p1)) {
+          return 2;
+        } else {
+          return 3;
+        }
+      }
+
+      function remap(a, c, b, d, input) {
+        var output = ((d - b) * (input - a)) / (c - a) + b;
+
+        return output;
+      }
+
+      function easeOutFunc(a, c, b, d, x) {
+        var gamma = (b - d) / Math.pow(a - c, 2);
+        var xv = Math.pow(x - c, 2);
+        var out_val = gamma * xv + d;
+
+        if (isNaN(out_val)) return 0;
+
+        return out_val;
+      }
+
+      function Interp(start, end) {
+        this.start = start;
+        this.end = end;
+        this.duration = 180;
+        this.enabled = true;
+        this.value = 0;
+        this.return_value = easeOutFunc(
+          0,
+          this.duration,
+          start,
+          end,
+          this.value
+        );
+
+        interp_ary.push(this);
+
+        this.update = function () {
+          if (!this.enabled) return;
+
+          if (0 <= this.value + 1 && this.value + 1 <= this.duration) {
+            this.value++;
+
+            var return_v = easeOutFunc(
+              0,
+              this.duration,
+              start,
+              end,
+              this.value
+            );
+            this.return_value = clamp(return_v, this.start, this.end);
+          } else {
+            this.enabled = false;
+          }
+        };
+
+        this.on = function () {
+          this.enabled = true;
+        };
+
+        this.off = function () {
+          this.enabled = false;
+        };
+      }
+
+      // --------------- // FUNCTIONS // ---------------
+
+      // Initiate
+      function init() {
+        // Init sizes with margin
+        canvas.width = innerWidth - 20;
+        canvas.height = innerHeight - 100;
+        top_table.width = innerWidth - 50;
+
+        player_ins.loc[0] = canvas.width / 7;
+        player_ins.loc[1] = canvas.height / 2;
+
+        animate();
+        spawn_stage_txt();
+
+        hscore = localStorage.getItem("hscore");
+      }
+
+      // Increase Score by comparing with previous target value
+      function increaseScore(target) {
+        if (prevTarget != target) {
+          score++;
+          prevTarget = target;
+          if (score % stage_per_obs == 0) {
+            increaseStage();
+          }
+        }
+      }
+
+      // Increase Stage
+      function increaseStage() {
+        curStage++;
+      }
+
+      // Spawn Current Stage Text
+      function spawn_stage_txt() {
+        var txt_ref_rect = obs_ary[obs_ary.length - 1].up_rect;
+        var txt_loc = [
+          (txt_ref_rect.loc1[0] + txt_ref_rect.loc2[0]) / 2,
+
+          canvas.height / 2,
+        ];
+        var t = new Text(
+          "STAGE " + Math.floor((obs_ary.length - 1) / stage_per_obs + 1),
+          txt_loc
+        );
+      }
+
+      // Spawn Obstacle with pattern
+      function spawn_obs() {
+        var v1 = rand(150, 500);
+        var v2 = rand(150, 500);
+
+        while (v1 + v2 >= canvas.height / tor) {
+          v1 = rand(150, 500);
+
+          v2 = rand(150, 500);
+        }
+
+        var o = new Obstacle([v1, v2]);
+
+        if (obs_ary.length == hscore) {
+          var htext = new HSCOREText("HIGH", [
+            (o.up_rect.loc1[0] + o.up_rect.loc2[0]) / 2,
+            canvas.height / 2,
+          ]);
+
+          var htext2 = new HSCOREText("SCORE!", [
+            (o.up_rect.loc1[0] + o.up_rect.loc2[0]) / 2,
+            canvas.height / 2 + 50,
+          ]);
+        }
+      }
+
+      // Return Random Color
+      function randColor(h, s, l, index) {
+        var new_h = h + index;
+        var c = "hsl(" + new_h + ", " + s + "%, " + l + "%)";
+        return c;
+      }
+
+      // --------------- // CLASS // ---------------
+
+      function Text(text, loc) {
+        this.STATUS = ALIVE;
+        this.text = text;
+        this.loc = loc;
+        txt_ary.push(this);
+
+        this.draw = function () {
+          c.beginPath();
+
+          c.font = "150px consolas";
+
+          c.fillText(text, loc[0], loc[1]);
+
+          c.closePath();
+        };
+
+        this.update = function () {
+          if (this.STATUS == DEAD) return;
+
+          this.loc[0] += speed;
+
+          this.draw();
+        };
+      }
+
+      function HSCOREText(text, loc) {
+        this.STATUS = ALIVE;
+        this.text = text;
+        this.loc = loc;
+        txt_ary.push(this);
+
+        this.draw = function () {
+          c.beginPath();
+          c.font = "50px consolas";
+          c.fillText(text, loc[0], loc[1]);
+          c.closePath();
+        };
+
+        this.update = function () {
+          if (this.STATUS == DEAD) return;
+          this.loc[0] += speed;
+          this.draw();
+        };
+      }
+
+      // pattern - [up_rect_size, down_rect_size]
+      function Obstacle(pattern) {
+        this.STATUS = ALIVE;
+        this.pattern = pattern;
+        this.color = randColor(0, 93, 77, obs_ary.length * 2);
+        this.dynamic = true; // Moving Feature Enabled?
+        this.dynamic_dir = randPercent3(
+          // Define Up / Down / Static
+          clamp(100 - curStage * 10, 0, 100),
+          clamp(curStage * 5, 0, 100),
+          clamp(curStage * 5, 0, 100)
+        );
+
+        this.dynamic_speed = clamp(Math.floor(curStage + 1 / 2), 0, 5);
+        this.up_rect = new Rect( // Up Rect
+          [canvas.width - 150, 0],
+
+          [canvas.width - 50, pattern[0]],
+          this.color,
+          1
+        );
+
+        this.down_rect = new Rect( // Down Rect
+          [canvas.width - 150, canvas.height - pattern[1]],
+          [canvas.width - 50, canvas.height],
+          this.color,
+          -1
+        );
+
+        obs_ary.push(this);
+
+        this.draw = function () {
+          this.up_rect.draw();
+          this.down_rect.draw();
+        };
+
+        this.update = function () {
+          if (this.STATUS == DEAD) return;
+          this.collision_check();
+          if (this.dynamic) this.dynamic_on(this.dynamic_dir);
+          this.up_rect.update();
+          this.down_rect.update();
+        };
+
+        this.collision_check = function () {
+          var isCollide = false;
+          // Check X Collision
+          if (
+            inRange(
+              player_ins.loc[0],
+              this.up_rect.loc1[0] - player_ins.radius,
+              this.up_rect.loc2[0] + player_ins.radius
+            )
+          ) {
+            // Check Y Collision
+            if (
+              inRange(
+                player_ins.loc[1],
+                this.up_rect.loc1[1] - player_ins.radius,
+                this.up_rect.loc2[1] + player_ins.radius
+              ) ||
+              inRange(
+                player_ins.loc[1],
+                this.down_rect.loc1[1] - player_ins.radius,
+                this.down_rect.loc2[1] + player_ins.radius
+              )
+            ) {
+              isCollide = true;
+            }
+
+            // Go Through?
+            player_ins.color = this.color;
+            increaseScore(this);
+          }
+
+          if (isCollide) {
+            GAME_OVER = true;
+          }
+
+          // Check Need Destory
+          if (
+            !inRange(this.up_rect.loc1[0], 0, canvas.width) &&
+            !inRange(this.up_rect.loc2[0], 0, canvas.width)
+          ) {
+            this.STATUS = DEAD;
+          }
+        };
+
+        this.dynamic_on = function (type) {
+          switch (type) {
+            case 1:
+              break;
+
+            case 2:
+              this.up_rect.loc2[1] -= this.dynamic_speed;
+              this.down_rect.loc1[1] -= this.dynamic_speed;
+              if (this.up_rect.loc2[1] <= 100) {
+                this.dynamic_dir = 3;
+              }
+              break;
+
+            case 3:
+              this.up_rect.loc2[1] += this.dynamic_speed;
+              this.down_rect.loc1[1] += this.dynamic_speed;
+              if (this.down_rect.loc1[1] >= canvas.height - 100) {
+                this.dynamic_dir = 2;
+              }
+          }
+        };
+      }
+
+      // type : -1 (down_rect) 1 (up_rect)
+      function Rect(loc1, loc2, color, type) {
+        this.target_loc1_y = loc1[1]; // Desire loc1_y value
+        this.target_loc2_y = loc2[1]; // Desire loc2_y value
+        this.loc1 = loc1;
+        this.loc2 = loc2;
+        this.animating_speed = 75; // Appear Animating Speed
+        this.isAnimating = true; // Is it currently animating?
+        this.interp_ins_down = new Interp(
+          this.target_loc1_y,
+          this.target_loc2_y,
+          this.animating_speed
+        );
+        this.interp_ins_up = new Interp(0, loc2[1], this.animating_speed);
+        this.type = type;
+
+        // Init loc1[1] value
+        if (type == -1) {
+          this.loc1[1] = loc2[1];
+        }
+        this.color = color;
+        this.draw = function () {
+          c.beginPath();
+          c.rect(
+            this.loc1[0],
+            this.loc1[1],
+            this.loc2[0] - this.loc1[0],
+            this.loc2[1] - this.loc1[1]
+          );
+          c.fillStyle = this.color;
+          c.fill();
+          c.closePath();
+        };
+
+        this.update = function () {
+          this.loc1[0] += speed;
+          this.loc2[0] += speed;
+
+          if (this.isAnimating) {
+            switch (this.type) {
+              case -1:
+                this.loc1[1] =
+                  this.target_loc2_y +
+                  this.target_loc1_y -
+                  this.interp_ins_down.return_value;
+                break;
+              case 1:
+                this.loc2[1] = this.interp_ins_up.return_value;
+                break;
+            }
+
+            if (
+              this.loc1[1] == this.target_loc1_y &&
+              this.loc2[1] == this.target_loc2_y
+            ) {
+              this.isAnimating = false;
+            }
+          }
+
+          this.draw();
+        };
+      }
+
+      function Trailer(loc, vel, color) {
+        this.loc = loc;
+        this.vel = vel;
+        this.color = color;
+        this.draw = function () {
+          c.beginPath();
+          c.arc(this.loc[0], this.loc[1], 5, 0, Math.PI * 2, false);
+          c.fillStyle = this.color;
+          c.fill();
+          c.closePath();
+        };
+
+        this.update = function () {
+          this.loc[0] += this.vel[0];
+          this.loc[1] += this.vel[1];
+          this.draw();
+        };
+      }
+
+      function Player(loc, vel) {
+        this.loc = loc;
+        this.vel = vel;
+        this.radius = 15;
+        this.gravity = 0.5;
+        this.color = "white";
+        this.draw = function () {
+          c.beginPath();
+          c.arc(this.loc[0], this.loc[1], this.radius, 0, Math.PI * 2, false);
+          c.fillStyle = this.color;
+          c.fill();
+          c.closePath();
+        };
+
+        this.update = function () {
+          this.dead_check();
+          this.vel[1] += this.gravity;
+          this.loc[0] += this.vel[0];
+          this.loc[1] += this.vel[1];
+          this.draw();
+        };
+
+        this.dead_check = function () {
+          if (!inRange(player_ins.loc[1], 0, canvas.height)) {
+            GAME_OVER = true;
+          }
+        };
+      }
+
+      // --------------- // MAIN LOOP // ---------------
+
+      function animate() {
+        if (GAME_OVER && !CHEAT_MODE) {
+          if (localStorage.hasOwnProperty("hscore")) {
+            if (localStorage.getItem("hscore") >= score) return;
+          }
+
+          localStorage.setItem("hscore", score);
+          return;
+        }
+
+        requestAnimationFrame(animate);
+        c.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Update Obstacles
+        for (var i = 0; i < obs_ary.length; i++) {
+          obs_ary[i].update();
+        }
+
+        // Update Texts
+        for (var i = 0; i < txt_ary.length; i++) {
+          txt_ary[i].update();
+        }
+
+        // Update Interp Instances
+        for (var i = 0; i < interp_ary.length; i++) {
+          interp_ary[i].update();
+        }
+
+        // Update Player Instance
+        player_ins.update();
+
+        // Update with Term
+        if (period % 40 == 0) {
+          spawn_obs();
+
+          // Increase Speed
+          speed = clamp(speed - 0.05, -20, -5);
+
+          // Decrease Tolerance of Pattern
+          tor = clamp(tor - 0.005, 1.1, 1.5);
+        }
+
+        if (!pause_period) {
+          period++;
+        } else {
+          temp_period++;
+        }
+
+        if (temp_period >= 150) {
+          temp_period = 0;
+          pause_period = false;
+          spawn_obs();
+          spawn_stage_txt();
+        }
+
+        if (obs_ary.length % stage_per_obs == 0) {
+          pause_period = true;
+        }
+
+        // Update Score, Stage Text
+        score_txt.innerText = "HI-SCORE : " + hscore + " / SCORE : " + score;
+        stage_txt.innerText = "STAGE : " + curStage;
+      }
+
+      init();
+    </script>
+  </body>
+</html>
